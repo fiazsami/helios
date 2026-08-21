@@ -242,3 +242,171 @@ TEST(rgb2hsl_saturation_uses_the_raw_channel_not_the_normalised_one)
     CHECK_NEAR(l, 0.5f, kTol);
     CHECK_NEAR(s, 0.5f, kTol);
 }
+
+/* --- hsl2rgb: the one remaining sextant ----------------------------------- */
+
+TEST(hsl2rgb_ramps_green_down_in_the_blue_sextant)
+{
+    /* h = 0.55 sits in [0.5, 0.666667): full blue, green ramping down, red at
+     * zero. Every other sextant is already exercised above; this is the one
+     * left uncovered. */
+    float r = -1.0f, g = -1.0f, b = -1.0f;
+    hsl2rgb(0.55f, 1.0f, 1.0f, r, g, b);
+    CHECK_NEAR(r, 0.0f, kTol);
+    CHECK_NEAR(g, 0.7f, kTol);
+    CHECK_NEAR(b, 1.0f, kTol);
+}
+
+/* --- hslTween -------------------------------------------------------------- */
+
+TEST(hslTween_forward_takes_the_direct_arc)
+{
+    /* direction == 0, h2 >= h1: straight interpolation, no wraparound. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.9f, 0.5f, 0, outh, outs, outl);
+    CHECK_NEAR(outh, 0.4f, kTol);
+    CHECK_NEAR(outs, 0.55f, kTol);
+    CHECK_NEAR(outl, 0.65f, kTol);
+}
+
+TEST(hslTween_forward_wraps_without_crossing_one)
+{
+    /* direction == 0, h2 < h1: goes the other way around the wheel, but the
+     * result stays inside [0, 1] so the `outh > 1` correction is not taken. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.6f, 0.3f, 0.4f, 0.2f, 0.8f, 0.9f, 0.5f, 0, outh, outs, outl);
+    CHECK_NEAR(outh, 0.9f, kTol);
+}
+
+TEST(hslTween_forward_wraps_and_corrects_past_one)
+{
+    /* Same branch as above, but with a tween large enough that the raw sum
+     * overshoots 1 and the `outh -= 1.0f` correction fires. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.6f, 0.3f, 0.4f, 0.2f, 0.8f, 0.9f, 0.9f, 0, outh, outs, outl);
+    CHECK_NEAR(outh, 0.14f, kTol);
+    CHECK_NEAR(outs, 0.75f, kTol);
+    CHECK_NEAR(outl, 0.85f, kTol);
+}
+
+TEST(hslTween_backward_takes_the_direct_arc)
+{
+    /* direction == 1, h1 >= h2: straight interpolation, no wraparound. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.6f, 0.3f, 0.4f, 0.2f, 0.8f, 0.9f, 0.5f, 1, outh, outs, outl);
+    CHECK_NEAR(outh, 0.4f, kTol);
+}
+
+TEST(hslTween_backward_wraps_without_crossing_zero)
+{
+    /* direction == 1, h1 < h2: goes the other way around the wheel, but the
+     * result stays >= 0 so the `outh += 1.0f` correction is not taken. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.9f, 0.2f, 1, outh, outs, outl);
+    CHECK_NEAR(outh, 0.08f, kTol);
+    CHECK_NEAR(outs, 0.4f, kTol);
+    CHECK_NEAR(outl, 0.5f, kTol);
+}
+
+TEST(hslTween_backward_wraps_and_corrects_below_zero)
+{
+    /* Same branch as above, but with a tween large enough that the raw
+     * difference goes negative and the `outh += 1.0f` correction fires. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+    hslTween(0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.9f, 0.9f, 1, outh, outs, outl);
+    CHECK_NEAR(outh, 0.66f, kTol);
+    CHECK_NEAR(outs, 0.75f, kTol);
+    CHECK_NEAR(outl, 0.85f, kTol);
+}
+
+TEST(hslTween_endpoints_at_tween_zero_and_one)
+{
+    /* tween == 0 reproduces color 1 exactly; tween == 1 reproduces color 2
+     * exactly, regardless of direction. */
+    float outh = -1.0f, outs = -1.0f, outl = -1.0f;
+
+    hslTween(0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.9f, 0.0f, 0, outh, outs, outl);
+    CHECK_NEAR(outh, 0.2f, kTol);
+    CHECK_NEAR(outs, 0.3f, kTol);
+    CHECK_NEAR(outl, 0.4f, kTol);
+
+    hslTween(0.2f, 0.3f, 0.4f, 0.6f, 0.8f, 0.9f, 1.0f, 0, outh, outs, outl);
+    CHECK_NEAR(outh, 0.6f, kTol);
+    CHECK_NEAR(outs, 0.8f, kTol);
+    CHECK_NEAR(outl, 0.9f, kTol);
+}
+
+/* --- rgbTween: composition across every huezone ---------------------------
+ *
+ * rgbTween is rgb2hsl -> hslTween -> hsl2rgb. It has no branches of its own,
+ * but it is the thing that actually walks colors through every huezone rgb2hsl
+ * can classify, so each case below picks a first color from a different one of
+ * the six zones and tweens it halfway to a fixed mid-grey second color.
+ *
+ * None of these round-trip cleanly -- ss-wrt means rgb2hsl's hue/saturation
+ * come from the raw channels rather than the normalised ones for any color
+ * that isn't fully saturated at full luminosity, which none of these are.
+ * Zones 2 and 3 additionally carry ss-4z1 (wrong luminosity channel). All six
+ * are characterization: they pin what the port must reproduce (or knowingly
+ * change) rather than a corrected contract. Expected values are the compiled
+ * algorithm's own output, cross-checked with an independent float32
+ * reimplementation, not a hand-derived HSL result. */
+
+TEST(rgbTween_huezone0_forward_half)
+{
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.9f, 0.4f, 0.2f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.7f, 1e-3f);
+    CHECK_NEAR(outg, 0.44975f, 1e-3f);
+    CHECK_NEAR(outb, 0.245f, 1e-3f);
+}
+
+TEST(rgbTween_huezone1_forward_half)
+{
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.5f, 1.0f, 0.2f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.2625f, 1e-3f);
+    CHECK_NEAR(outg, 0.2625f, 1e-3f);
+    CHECK_NEAR(outb, 0.75f, 1e-3f);
+}
+
+TEST(rgbTween_huezone2_forward_half)
+{
+    /* ss-4z1: huezone 2 reads luminosity off g instead of b.
+     * ss-wrt: hue/saturation come from raw r/g/b, not the normalised values.
+     * Both feed this color's HSL extraction before it is even tweened. */
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.25f, 0.5f, 0.8f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.390624f, 1e-3f);
+    CHECK_NEAR(outg, 0.1875f, 1e-3f);
+    CHECK_NEAR(outb, 0.5f, 1e-3f);
+}
+
+TEST(rgbTween_huezone3_forward_half)
+{
+    /* ss-4z1: huezone 3 reads luminosity off b instead of g.
+     * ss-wrt: hue/saturation come from raw r/g/b, not the normalised values. */
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.25f, 0.9f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.437499f, 1e-3f);
+    CHECK_NEAR(outg, 0.1875f, 1e-3f);
+    CHECK_NEAR(outb, 0.5f, 1e-3f);
+}
+
+TEST(rgbTween_huezone4_forward_half)
+{
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.5f, 0.2f, 0.9f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.7f, 1e-3f);
+    CHECK_NEAR(outg, 0.245f, 1e-3f);
+    CHECK_NEAR(outb, 0.472499f, 1e-3f);
+}
+
+TEST(rgbTween_huezone5_forward_half)
+{
+    float outr = -1.0f, outg = -1.0f, outb = -1.0f;
+    rgbTween(0.9f, 0.2f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0, outr, outg, outb);
+    CHECK_NEAR(outr, 0.7f, 1e-3f);
+    CHECK_NEAR(outg, 0.245f, 1e-3f);
+    CHECK_NEAR(outb, 0.245f, 1e-3f);
+}
