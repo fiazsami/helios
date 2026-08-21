@@ -20,6 +20,7 @@
 #include "harness.h"
 
 #include "rsMath/rsMath.h"
+#include "rsMath/rsTrigonometry.h"
 #include "rsMath/rsVec.h"
 
 #include <math.h>
@@ -27,6 +28,7 @@
 
 namespace {
 const float kTol = 1e-5f;
+const float kPi = 3.14159265358979f;
 }
 
 /* --- the exposed free functions ------------------------------------------ */
@@ -135,6 +137,60 @@ TEST(rand_float_stays_inside_the_closed_range)
     /* A range of zero collapses to a point regardless of the draw. */
     for (int i = 0; i < 10; i++)
         CHECK_NEAR(rsRandf(0.0f), 0.0f, kTol);
+}
+
+/* --- the fast-math approximations ----------------------------------------
+ *
+ * rsSqrtf/rsInvSqrtf pick between an SSE intrinsic and a scalar fallback at
+ * compile time; the two branches are independent implementations of the same
+ * contract, and the test only pins that contract, not which branch ran.
+ * rsSqrtf's SSE path is a real IEEE sqrt instruction, so the tolerance is
+ * tight; rsInvSqrtf's SSE path is a fast reciprocal-sqrt approximation with
+ * a documented relative error up to ~1.5e-3, so its tolerance is looser to
+ * stay portable across both branches without being wide enough to hide a
+ * dropped reciprocal.
+ *
+ * rsCosf/rsSinf are lookup-table approximations driven by a float-to-int bit
+ * trick (see test_impknot.cpp's comment on the same functions): a magic bias
+ * remaps the input into a 256-entry table index plus an interpolation
+ * fraction. That machinery has real bug surface -- a wrong scale constant, a
+ * swapped sin/cos table, a dropped fraction term, or a wrong byte picked out
+ * of the remapped float -- so the values here are exact multiples of pi/2,
+ * chosen to land on table boundaries where the expected value is known
+ * exactly, at the same 1e-4 tolerance test_impknot.cpp measured the
+ * approximation's own error to be under. */
+
+TEST(sqrtf_matches_the_real_square_root)
+{
+    CHECK_NEAR(rsSqrtf(4.0f), 2.0f, kTol);
+    CHECK_NEAR(rsSqrtf(2.0f), sqrtf(2.0f), kTol);
+    CHECK_NEAR(rsSqrtf(0.0f), 0.0f, kTol);
+}
+
+TEST(inv_sqrtf_matches_the_reciprocal_square_root)
+{
+    /* Relative tolerance: the SSE branch is an approximation, not an exact
+     * divide, so an absolute tolerance would either be too tight for that
+     * branch or too loose to catch a dropped 1/x on the scalar branch. */
+    CHECK(fabsf(rsInvSqrtf(4.0f) - 0.5f) <= 0.5f * 0.01f);
+    CHECK(fabsf(rsInvSqrtf(1.0f) - 1.0f) <= 1.0f * 0.01f);
+    CHECK(fabsf(rsInvSqrtf(0.25f) - 2.0f) <= 2.0f * 0.01f);
+}
+
+TEST(cosf_matches_the_real_cosine_at_quadrant_boundaries)
+{
+    CHECK_NEAR(rsCosf(0.0f), 1.0f, 1e-4f);
+    CHECK_NEAR(rsCosf(kPi * 0.5f), 0.0f, 1e-4f);
+    CHECK_NEAR(rsCosf(kPi), -1.0f, 1e-4f);
+    CHECK_NEAR(rsCosf(kPi * 1.5f), 0.0f, 1e-4f);
+}
+
+TEST(sinf_matches_the_real_sine_at_quadrant_boundaries)
+{
+    CHECK_NEAR(rsSinf(0.0f), 0.0f, 1e-4f);
+    CHECK_NEAR(rsSinf(kPi * 0.5f), 1.0f, 1e-4f);
+    CHECK_NEAR(rsSinf(kPi), 0.0f, 1e-4f);
+    CHECK_NEAR(rsSinf(kPi * 1.5f), -1.0f, 1e-4f);
 }
 
 TEST(rand_helpers_are_reproducible_from_a_seed)
