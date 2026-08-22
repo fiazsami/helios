@@ -172,28 +172,34 @@ TEST(vec4_transPoint_applies_the_full_4x4_transform_including_translation_and_w_
     rsMatrix mat;
     makeGenericMatrix(mat);
 
-    rsVec4 point(1.0f, 1.0f, 1.0f, 1.0f);
+    /* Point components (1,2,3,4) are all distinct, unlike an all-ones point:
+     * with x==y==z==w, swapping which matrix column pairs with which point
+     * component (e.g. y*m[4]+z*m[8] computed as y*m[8]+z*m[4]) is invisible,
+     * because the two terms being swapped have equal coefficients. Distinct
+     * components make that swap a wrong, checkable number. */
+    rsVec4 point(1.0f, 2.0f, 3.0f, 4.0f);
     point.transPoint(mat);
-    CHECK_NEAR(point[0], 77.0f, kTol);    /* m0+m4+m8+m12 */
-    CHECK_NEAR(point[1], 88.0f, kTol);    /* m1+m5+m9+m13 */
-    CHECK_NEAR(point[2], 100.0f, kTol);   /* m2+m6+m10+m14 */
-    CHECK_NEAR(point[3], 116.0f, kTol);   /* m3+m7+m11+m15 */
+    CHECK_NEAR(point[0], 257.0f, kTol);   /* 1*m0+2*m4+3*m8+4*m12 */
+    CHECK_NEAR(point[1], 288.0f, kTol);   /* 1*m1+2*m5+3*m9+4*m13 */
+    CHECK_NEAR(point[2], 320.0f, kTol);   /* 1*m2+2*m6+3*m10+4*m14 */
+    CHECK_NEAR(point[3], 368.0f, kTol);   /* 1*m3+2*m7+3*m11+4*m15 */
 }
 
 TEST(vec4_transVec_drops_the_translation_and_w_row_and_leaves_w_untouched)
 {
-    /* Same matrix as the transPoint case: transVec must apply the linear
-     * (upper-left 3x3) part but ignore both the translation column and the
-     * w row entirely, and it must not write v[3] at all -- the prior w
-     * survives whatever the matrix's w row says. */
+    /* Same matrix as the transPoint case, and the same distinct-component
+     * reasoning: transVec must apply the linear (upper-left 3x3) part but
+     * ignore both the translation column and the w row entirely, and it
+     * must not write v[3] at all -- the prior w survives whatever the
+     * matrix's w row says. */
     rsMatrix mat;
     makeGenericMatrix(mat);
 
-    rsVec4 direction(1.0f, 1.0f, 1.0f, 99.0f);
+    rsVec4 direction(1.0f, 2.0f, 3.0f, 99.0f);
     direction.transVec(mat);
-    CHECK_NEAR(direction[0], 36.0f, kTol);   /* m0+m4+m8, translation excluded */
-    CHECK_NEAR(direction[1], 45.0f, kTol);   /* m1+m5+m9 */
-    CHECK_NEAR(direction[2], 53.0f, kTol);   /* m2+m6+m10 */
+    CHECK_NEAR(direction[0], 93.0f, kTol);    /* 1*m0+2*m4+3*m8, translation excluded */
+    CHECK_NEAR(direction[1], 116.0f, kTol);   /* 1*m1+2*m5+3*m9 */
+    CHECK_NEAR(direction[2], 132.0f, kTol);   /* 1*m2+2*m6+3*m10 */
     CHECK_NEAR(direction[3], 99.0f, kTol);   /* untouched, not 0 and not transformed */
 }
 
