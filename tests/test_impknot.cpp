@@ -149,9 +149,12 @@ TEST(knot_value_peaks_on_the_first_coil_ring)
 
     /* radius1=1, radius2=0.5 (defaults): x = 1.5 sits exactly on the i=0
      * coil ring. Two other coils (default coils=3) each contribute a small
-     * off-ring term; the total was cross-checked offline at 100.026663. */
+     * off-ring term; the total was measured from the real, unmutated value()
+     * at 100.026680. (helios carried 100.026672 and hyperspace 100.026663;
+     * both sit inside the 0.01 tolerance, but neither is what the function
+     * returns, so this is the measured figure rather than either of them.) */
     float onRing[3] = {1.5f, 0.0f, 0.0f};
-    CHECK_NEAR(k.value(onRing), 100.026663f, 0.01f);
+    CHECK_NEAR(k.value(onRing), 100.026680f, 0.01f);
 }
 
 TEST(knot_value_falls_off_away_from_the_tube)
