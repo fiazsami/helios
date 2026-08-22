@@ -49,7 +49,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
+#include <new>
 #include <utility>
 #include <vector>
 
@@ -260,10 +262,22 @@ TEST(impcubevolume_the_mesh_is_a_closed_manifold)
     const unsigned int indices = surface->getIndexCount();
     CHECK(indices > 0);
 
+    const unsigned int vertices = surface->getVertexCount();
+
     std::map<std::pair<unsigned int, unsigned int>, int> edges;
     for (unsigned int t = 0; t + 2 < indices; t += 3) {
         const unsigned int corner[3] = {surface->getIndex(t), surface->getIndex(t + 1),
                                         surface->getIndex(t + 2)};
+        /* Range-check here rather than trusting the case that asserts it.
+         * harness_fail records and continues, so a failure over there does not
+         * stop this loop, and getVertex does not bounds-check -- an out-of-
+         * range index reads unmapped memory and takes the whole binary down,
+         * which coverage.sh reports as a build error rather than a test
+         * failure. ss-ma1 produces exactly that state. */
+        if (corner[0] >= vertices || corner[1] >= vertices || corner[2] >= vertices) {
+            CHECK(corner[0] < vertices && corner[1] < vertices && corner[2] < vertices);
+            return;
+        }
         for (int k = 0; k < 3; k++) {
             unsigned int a = corner[k];
             unsigned int b = corner[(k + 1) % 3];
@@ -282,15 +296,23 @@ TEST(impcubevolume_the_mesh_is_a_closed_manifold)
 
 /* The triangulated area matches the sphere it approximates.
  *
- * Upper bound is analytic and follows from the case above: every vertex lies
- * on or inside the sphere, so the surface is inscribed and cannot have more
- * area than the sphere itself.
+ * BOTH BOUNDS ARE EMPIRICAL. An earlier version of this comment called the
+ * upper bound analytic, reasoning that every vertex lies on or inside the
+ * sphere so the surface is inscribed and cannot exceed the sphere's area.
+ * That is not a theorem. Inscribing does not bound area: the Schwarz lantern
+ * is a cylinder-inscribed triangulation whose area diverges as it is refined,
+ * and the argument would need convexity of the polyhedron, which nothing here
+ * establishes -- vertices may sit anywhere in the shell R^2 - h^2/4 <= |v|^2
+ * <= R^2 and a crinkled tessellation of that shell can have more area than the
+ * sphere.
  *
- * The lower bound is the discretization error. A surface tessellated at edge
- * spacing h loses area at order (h/R)^2 -- here h/R = 0.25, so a few percent,
- * and the measured ratio is 0.9735. 0.95 leaves room for a different but
- * still-correct tessellation without admitting a mesh that has lost whole
- * regions.
+ * What is true is that marching cubes on a uniform grid produces a
+ * well-shaped tessellation whose area converges from below at order (h/R)^2.
+ * Here h/R = 0.25 and the measured ratio is 0.9735. The bounds are 0.95 and
+ * 1.0: wide enough for a different but still-correct tessellation, tight
+ * enough to catch a mesh that has lost whole regions. If a port ever trips the
+ * upper bound, the honest reading is "this tessellation is rougher than the
+ * one we characterized", not "this is mathematically impossible".
  *
  * This is the assertion that would catch triangles going missing, which is
  * worth stating because a kill-check found the one mutation that does *not*
@@ -311,11 +333,22 @@ TEST(impcubevolume_the_triangulated_area_matches_the_sphere)
     const unsigned int indices = surface->getIndexCount();
     CHECK(indices > 0);
 
+    const unsigned int vertices = surface->getVertexCount();
+
     double area = 0.0;
     for (unsigned int t = 0; t + 2 < indices; t += 3) {
-        const float *a = surface->getVertex(surface->getIndex(t));
-        const float *b = surface->getVertex(surface->getIndex(t + 1));
-        const float *c = surface->getVertex(surface->getIndex(t + 2));
+        const unsigned int ia = surface->getIndex(t);
+        const unsigned int ib = surface->getIndex(t + 1);
+        const unsigned int ic = surface->getIndex(t + 2);
+        /* Same reason as the manifold case: getVertex does not bounds-check,
+         * and a bad index here is a crash rather than a failed assertion. */
+        if (ia >= vertices || ib >= vertices || ic >= vertices) {
+            CHECK(ia < vertices && ib < vertices && ic < vertices);
+            return;
+        }
+        const float *a = surface->getVertex(ia);
+        const float *b = surface->getVertex(ib);
+        const float *c = surface->getVertex(ic);
         const double ux = double(b[3]) - a[3], uy = double(b[4]) - a[4], uz = double(b[5]) - a[5];
         const double vx = double(c[3]) - a[3], vy = double(c[4]) - a[4], vz = double(c[5]) - a[5];
         const double cx = uy * vz - uz * vy;
@@ -325,8 +358,10 @@ TEST(impcubevolume_the_triangulated_area_matches_the_sphere)
     }
 
     const double sphereArea = 4.0 * 3.14159265358979323846 * kR2;
-    CHECK(area < sphereArea);            /* inscribed -- analytic */
-    CHECK(area > sphereArea * 0.95);     /* discretization at h/R = 0.25 */
+    /* Both empirical -- see the header comment. Inscribing does not bound
+     * area, so this pair brackets the measured 0.9735 rather than proving it. */
+    CHECK(area < sphereArea);
+    CHECK(area > sphereArea * 0.95);
 }
 
 /* Normals point out of the solid, not into it. Getting this backwards is the
@@ -387,8 +422,13 @@ TEST(impcubevolume_fast_normals_are_coarser_than_accurate_ones)
  * where the difference between the code paths is observable at all.
  *
  * The counts are asserted as relations, not as the numbers a run produced.
- * The two balls are mirror images, so "one seed finds exactly half" follows
- * from symmetry and stays true if the grid or radius changes. */
+ * "One seed finds exactly half" follows from the two balls being mirror
+ * images -- but it needs them to stay DISJOINT, which is a condition on the
+ * fixture and not a free consequence of symmetry. Raise kRadius toward
+ * field.centre and the balls merge into one component; a single seed then
+ * reaches all of it, fromOne == exhaustive, and this case fails with the code
+ * entirely correct. The invariant survives a change of grid, and a change of
+ * radius only while 2*R stays clear of 2*centre. */
 TEST(impcubevolume_crawl_finds_only_what_it_is_seeded_from)
 {
     TwoSpheres field;
@@ -503,6 +543,146 @@ TEST(impcubevolume_surface_value_selects_the_radius)
 
     /* And it really is a different sphere, not the old one within tolerance. */
     CHECK(expectedR2 < kR2 - kBound);
+}
+
+/* The generation counter survives hostile storage (ss-ma1).
+ *
+ * impCubeVolume::frame is the counter the per-edge vertex cache compares
+ * against, and init() zeroes every cubedata *_frame field to 0. The
+ * constructor used not to initialise `frame` at all, so a storage slot holding
+ * 0xFFFF wrapped to 0 on the first makeSurface and every edge reported a cache
+ * hit before anything had been cached: addVertexToSurface took the early
+ * return, pushed cubes[index].x_vertex_index, and never called addVertex. The
+ * surface came back with a full index array over ZERO vertices.
+ *
+ * Those indices were all 0 rather than garbage -- cubedata is an aggregate
+ * with no user-provided constructor, so cubes.resize() value-initialises it,
+ * even across a clear() that leaves poisoned capacity behind. Index 0 is out
+ * of range for an empty vertex array all the same. An earlier version of this
+ * comment called them uninitialised, which was wrong, and the review that
+ * caught it is also why the area case above range-checks before it
+ * dereferences.
+ *
+ * Reproducing that needs the storage to be hostile on purpose. Placement-new
+ * over a buffer of 0xFF makes the old failure deterministic instead of a
+ * 1-in-65536 flake, and with the fix in place the whole case is ordinary
+ * defined behaviour -- the constructor writes `frame` before anything reads
+ * it.
+ *
+ * WHAT THIS CASE DOES AND DOES NOT PIN, because the kill-check moved under it.
+ * It no longer discriminates the constructor's `frame = 0;` on its own:
+ * removing that line alone leaves the suite green, because advanceFrame()
+ * covers the same ground. 0xFFFF is the only dangerous starting value -- every
+ * other one increments to something no cubedata counter holds -- and 0xFFFF
+ * increments to 0, which is exactly the wrap advanceFrame() now handles by
+ * re-zeroing and restarting at 1.
+ *
+ * So `frame = 0;` is belt-and-braces relative to the wrap handler, kept
+ * because leaning on a wrap to double as construction-time initialisation is
+ * a coupling nobody should have to notice. What this case still pins, and what
+ * actually matters, is that construction over hostile storage yields a correct
+ * surface: removing BOTH the constructor line and the wrap handling fails it.
+ * Verified all three ways.
+ *
+ * This is the one case here that is not about geometry. It is here rather than
+ * in test_impsurface.cpp because the counter belongs to impCubeVolume and the
+ * damage shows up in what makeSurface emits. */
+TEST(impcubevolume_survives_construction_over_poisoned_storage)
+{
+    alignas(impCubeVolume) static unsigned char storage[sizeof(impCubeVolume)];
+    std::memset(storage, 0xFF, sizeof(storage));
+
+    impCubeVolume *volume = new (storage) impCubeVolume();
+    float r2;
+    configureSphere(*volume, r2);
+    volume->makeSurface();
+
+    const impSurface *surface = volume->getSurface();
+    const unsigned int count = surface->getVertexCount();
+
+    /* The exact signature of the bug: indices emitted, vertices not. Asserting
+     * both directions means neither a silent zero nor a silent index array can
+     * pass. */
+    CHECK(count > 0);
+    CHECK(surface->getIndexCount() > 0);
+
+    for (unsigned int i = 0; i < surface->getIndexCount(); i++) {
+        if (surface->getIndex(i) >= count) {
+            CHECK(surface->getIndex(i) < count);
+            break;
+        }
+    }
+
+    /* Geometry is still geometry, even here: a cache that mistakenly reported
+     * hits would return in-range indices to vertices that were never placed. */
+    for (unsigned int i = 0; i < count; i++) {
+        const double r2v = squaredRadius(surface->getVertex(i));
+        CHECK(r2v <= kR2 + kFloatSlack);
+        CHECK(r2v >= kR2 - kBound - kFloatSlack);
+    }
+
+    volume->~impCubeVolume();
+}
+
+/* The generation counter survives its own wrap (ss-ma1, second half).
+ *
+ * Initialising `frame` fixes the first frame. It does not fix the 65536th.
+ * `frame` is an unsigned short and init() zeroes every cubedata *_frame to 0,
+ * so when the counter wraps back to 0 it collides with "not touched since
+ * init" all over again -- once every 65536 calls, roughly every 18 minutes at
+ * 60fps.
+ *
+ * A static field hides this completely, which is why the first attempt at this
+ * case found nothing: the same edges are crossed every frame, so no cube the
+ * crawl visits still carries 0. The collision needs the surface to reach a
+ * cube for the FIRST time on the wrapping frame. So the volume runs 65535
+ * times around a small sphere, and the sphere then grows on exactly the call
+ * that wraps.
+ *
+ * Measured before the fix, and it is not a subtle corruption: the crawl seed
+ * itself reads as already-done, crawl_nosort returns immediately, and the
+ * surface comes back with ZERO vertices where it should have 294. One frame in
+ * every 65536, the object disappears.
+ *
+ * The expected count comes from a freshly-constructed volume rather than a
+ * literal, so this stays a relation between two runs of the same code rather
+ * than a golden number. */
+TEST(impcubevolume_survives_the_generation_counter_wrapping)
+{
+    const float smallR2 = 0.0625f;  /* R = 0.25 */
+    float bigR2 = float(kR2);       /* R = 1.0, needs cubes the small one never touches */
+
+    impCrawlPointVector seed;
+    seed.push_back(impCrawlPoint(0.0f, 0.0f, 0.0f));
+
+    /* What the big sphere looks like with no history behind it. */
+    unsigned int expected;
+    {
+        impCubeVolume fresh;
+        fresh.function = sphereField;
+        fresh.contextInfoForFunction = &bigR2;
+        fresh.init(kCubes, kCubes, kCubes, kCubeWidth);
+        fresh.setSurfaceValue(kSurfaceValue);
+        fresh.makeSurface(seed);
+        expected = fresh.getSurface()->getVertexCount();
+        CHECK(expected > 0);
+    }
+
+    float small = smallR2;
+    impCubeVolume volume;
+    volume.function = sphereField;
+    volume.contextInfoForFunction = &small;
+    volume.init(kCubes, kCubes, kCubes, kCubeWidth);
+    volume.setSurfaceValue(kSurfaceValue);
+
+    /* frame is 0 after construction and call k leaves it at k, so call 65536
+     * is the one that wraps. Run 65535 first. */
+    for (long i = 0; i < 65535; i++) volume.makeSurface(seed);
+
+    volume.contextInfoForFunction = &bigR2;
+    volume.makeSurface(seed);
+
+    CHECK(volume.getSurface()->getVertexCount() == expected);
 }
 
 /* A field that never reaches the threshold has no isosurface, and the pipeline
