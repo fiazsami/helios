@@ -569,6 +569,21 @@ TEST(impcubevolume_surface_value_selects_the_radius)
  * defined behaviour -- the constructor writes `frame` before anything reads
  * it.
  *
+ * WHAT THIS CASE DOES AND DOES NOT PIN, because the kill-check moved under it.
+ * It no longer discriminates the constructor's `frame = 0;` on its own:
+ * removing that line alone leaves the suite green, because advanceFrame()
+ * covers the same ground. 0xFFFF is the only dangerous starting value -- every
+ * other one increments to something no cubedata counter holds -- and 0xFFFF
+ * increments to 0, which is exactly the wrap advanceFrame() now handles by
+ * re-zeroing and restarting at 1.
+ *
+ * So `frame = 0;` is belt-and-braces relative to the wrap handler, kept
+ * because leaning on a wrap to double as construction-time initialisation is
+ * a coupling nobody should have to notice. What this case still pins, and what
+ * actually matters, is that construction over hostile storage yields a correct
+ * surface: removing BOTH the constructor line and the wrap handling fails it.
+ * Verified all three ways.
+ *
  * This is the one case here that is not about geometry. It is here rather than
  * in test_impsurface.cpp because the counter belongs to impCubeVolume and the
  * damage shows up in what makeSurface emits. */
