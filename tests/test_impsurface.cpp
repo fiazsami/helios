@@ -80,8 +80,11 @@ TEST(impcubevolume_constructs_and_owns_a_surface)
  * ss-or3 -- but it does prove the allocation path survives outside a
  * renderer, which is what ss-or3 will be standing on.
  *
- * 4x4x4 rather than the 40-odd cubes Helios.cpp uses: large enough that
- * w_1xh_1xl_1 is not degenerate, small enough to stay instant. */
+ * The constructor already calls init(4, 4, 4, 0.2f), so this is a re-init on
+ * a live object rather than a first one. The cube width differs from that
+ * default deliberately: an init() that ignored its arguments and left the
+ * constructor's grid in place would be indistinguishable from a working one
+ * if the case passed 0.2f back in. */
 TEST(impcubevolume_init_allocates_without_a_gl_context)
 {
     impCubeVolume volume;
@@ -92,8 +95,10 @@ TEST(impcubevolume_init_allocates_without_a_gl_context)
 /* The surface value is the one piece of impCubeVolume's state that is both
  * settable and readable, so it is the only round-trip available to show the
  * object is functional after construction rather than merely allocated.
- * 0.42f is arbitrary but not 0.0f or 1.0f, either of which could be matched by
- * a stub returning a default. */
+ * 0.42f is arbitrary, but it is specifically not the 0.5f the constructor
+ * assigns: an accessor stubbed to return that default would otherwise pass.
+ * Confirmed by mutation -- stubbing getSurfaceValue to 0.5f fails this case
+ * and only this case. */
 TEST(impcubevolume_state_survives_construction)
 {
     impCubeVolume volume;
