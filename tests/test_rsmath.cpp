@@ -641,22 +641,49 @@ TEST(matrix_rotationInvert_does_not_actually_invert_the_rotation)
      * every rotation matrix tried here (an axis-aligned quarter turn and a
      * generic-axis rotation alike), reproduces the *input* matrix rather than
      * its inverse -- invert() on the same input gives the mathematically
-     * correct transpose. This is a real discrepancy, distinct from the two
-     * bugs called out in the task (ss-qss's slerp and the rgb2hsl pair); no
-     * bd issue is filed for it yet. Pinned as found, not fixed. */
-    rsQuat q;
-    q.make(0.9f, rsVec(1.0f, 2.0f, 2.0f));
-    rsMatrix rot;
-    q.toMat(rot.m);
+     * correct transpose. This is filed as ss-c6g and is deliberately left
+     * unfixed; pinned as found.
+     *
+     * Both cases named in that sentence are actually built below. They were
+     * not always: an earlier version described two and tested one, and passed
+     * rsVec(1,2,2) -- length 3 -- to make(), whose header documents a
+     * NORMALIZED axis. toMat divides by the quaternion's norm squared, so the
+     * matrix came out orthonormal either way and the test still passed, but
+     * the rotation it encoded was not by 0.9 rad and the fixture said
+     * otherwise. The axis is normalized here so the stated angle is the real
+     * one. */
+    {
+        /* Axis-aligned quarter turn about z. */
+        rsQuat q;
+        q.make(RS_PIo2, rsVec(0.0f, 0.0f, 1.0f));
+        rsMatrix rot;
+        q.toMat(rot.m);
 
-    rsMatrix viaRotationInvert;
-    viaRotationInvert.rotationInvert(rot);
-    for (int i = 0; i < 16; i++) CHECK_NEAR(viaRotationInvert.m[i], rot.m[i], 1e-4f);
+        rsMatrix viaRotationInvert;
+        viaRotationInvert.rotationInvert(rot);
+        for (int i = 0; i < 16; i++) CHECK_NEAR(viaRotationInvert.m[i], rot.m[i], 1e-4f);
 
-    rsMatrix viaInvert;
-    viaInvert.invert(rot);
-    /* The two disagree -- that is the point being pinned. */
-    CHECK(fabsf(viaInvert.m[1] - viaRotationInvert.m[1]) > 0.1f);
+        rsMatrix viaInvert;
+        viaInvert.invert(rot);
+        /* The two disagree -- that is the point being pinned. */
+        CHECK(fabsf(viaInvert.m[1] - viaRotationInvert.m[1]) > 0.1f);
+    }
+
+    {
+        /* Generic axis, normalized: (1,2,2)/3. */
+        rsQuat q;
+        q.make(0.9f, rsVec(1.0f / 3.0f, 2.0f / 3.0f, 2.0f / 3.0f));
+        rsMatrix rot;
+        q.toMat(rot.m);
+
+        rsMatrix viaRotationInvert;
+        viaRotationInvert.rotationInvert(rot);
+        for (int i = 0; i < 16; i++) CHECK_NEAR(viaRotationInvert.m[i], rot.m[i], 1e-4f);
+
+        rsMatrix viaInvert;
+        viaInvert.invert(rot);
+        CHECK(fabsf(viaInvert.m[1] - viaRotationInvert.m[1]) > 0.1f);
+    }
 }
 
 TEST(matrix_stream_operator_prints_rows_in_the_columns_stored_order)
@@ -779,15 +806,15 @@ TEST(quat_fromMat_recovers_a_generic_orientation_when_the_trace_is_positive)
 
 TEST(quat_fromMat_dominant_axis_branches_zero_the_axis_component_on_a_fresh_quat)
 {
-    /* Characterization of a real bug (found while writing this test, not one
-     * of the two named in the task; no bd issue filed yet). For trace <= 0,
-     * fromMat picks the dominant diagonal axis i and is supposed to write
-     * q[i] = sqrt(...) * 0.5. Instead it writes `q[i] *= 0.5f` -- it reads
-     * whatever q[i] already held *before* this call and halves that, rather
-     * than assigning the freshly computed value. On a default-constructed
-     * rsQuat (q[i] == 0 for i in 0..2), that means the dominant component
-     * always comes out 0, no matter what the input matrix says it should be.
-     * All three axis branches (i==0, i==1, i==2) show the same pattern. */
+    /* Characterization of a real bug, filed as ss-9wk, beyond the slerp bug
+     * (ss-qss). For trace <= 0, fromMat picks the dominant diagonal axis i
+     * and is supposed to write q[i] = sqrt(...) * 0.5. Instead it writes
+     * `q[i] *= 0.5f` -- it reads whatever q[i] already held *before* this
+     * call and halves that, rather than assigning the freshly computed value.
+     * On a default-constructed rsQuat (q[i] == 0 for i in 0..2), that means
+     * the dominant component always comes out 0, no matter what the input
+     * matrix says it should be. All three axis branches (i==0, i==1, i==2)
+     * show the same pattern. */
     const float angle = 2.6179938f;   /* 150 degrees: trace = 1 + 2*cos(150) < 0 */
 
     {   /* dominant x: correct answer would be (sin75, 0, 0, cos75) */
@@ -826,10 +853,10 @@ TEST(quat_fromMat_dominant_axis_branches_zero_the_axis_component_on_a_fresh_quat
 
 TEST(quat_fromMat_dominant_axis_component_is_read_from_whatever_the_caller_left_there)
 {
-    /* Sharper version of the same bug: seed the target quaternion with an
-     * arbitrary prior x component (9.0) instead of the default 0, and the
-     * dominant-x branch's output x is exactly half of it (4.5) -- the input
-     * matrix has no say in that component at all. */
+    /* Sharper version of the same bug (ss-9wk): seed the target quaternion
+     * with an arbitrary prior x component (9.0) instead of the default 0, and
+     * the dominant-x branch's output x is exactly half of it (4.5) -- the
+     * input matrix has no say in that component at all. */
     rsQuat correct;
     correct.make(2.6179938f, rsVec(1.0f, 0.0f, 0.0f));
     float mat[16];
@@ -842,12 +869,12 @@ TEST(quat_fromMat_dominant_axis_component_is_read_from_whatever_the_caller_left_
 
 TEST(quat_fromMat_off_axis_dominant_branch_also_miscomputes_the_other_two_components)
 {
-    /* A second, independent defect in the same branch, visible once the axis
-     * is not conveniently aligned so the "wrong" component isn't coincidentally
-     * zero anyway: the formula for the two non-dominant, non-w components
-     * pulls the wrong pair of matrix entries, so they come out neither
-     * matching the source rotation nor the earlier all-zero pattern. Pinned
-     * as observed. */
+    /* A second, independent defect in the same branch (also part of ss-9wk),
+     * visible once the axis is not conveniently aligned so the "wrong"
+     * component isn't coincidentally zero anyway: the formula for the two
+     * non-dominant, non-w components pulls the wrong pair of matrix entries,
+     * so they come out neither matching the source rotation nor the earlier
+     * all-zero pattern. Pinned as observed. */
     rsQuat correct;
     rsVec axis(1.0f, 1.0f, 0.0f);
     axis.normalize();
