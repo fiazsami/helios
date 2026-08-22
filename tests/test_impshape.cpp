@@ -8,6 +8,14 @@
  *
  * Matrices are column-major (mat[12..14] is the translation column), matching
  * the convention noted in test_rsmath.cpp and test_imp_primitives.cpp.
+ *
+ * ss-e5n: this file used only identity, pure-translation or diagonal
+ * matrices, so invmat's and invtrmat's linear-part entries were never
+ * distinguishable from each other and were 0 or 1 wherever setPosition
+ * looked. test_imp_primitives.cpp and test_impknot.cpp fixed the same gap
+ * for the primitives' value() functions with a shared "coupled" matrix whose
+ * linear part is fully populated; setPosition and invertMatrix below reuse
+ * that same matrix rather than a weaker one.
  */
 
 #include "harness.h"
@@ -22,6 +30,27 @@ void makeIdentity(float *m)
 {
     for (int i = 0; i < 16; i++) m[i] = 0.0f;
     m[0] = m[5] = m[10] = m[15] = 1.0f;
+}
+
+/* Same matrix as test_imp_primitives.cpp's makeCoupledMatrix and
+ * test_impknot.cpp's copy of it. Its 3x3 linear part is deliberately
+ * non-symmetric ([[2,1.5,-1.5],[1,3,1],[1,1,4]] -- the storage is column-major,
+ * so those rows are (m[0],m[4],m[8]), (m[1],m[5],m[9]), (m[2],m[6],m[10]), NOT
+ * m[0..2]/m[4..6]/m[8..10], which would be its transpose and would lead anyone
+ * re-deriving the inverse below to the wrong answer). A symmetric block would
+ * make its own inverse symmetric too and leave the transpose step in
+ * setMatrix() unable to be told from a verbatim copy of the linear part.
+ *
+ * invmat's linear part was solved independently as the analytic inverse of
+ * that 3x3 (determinant 41/2): [[22,-15,12],[-6,19,-7],[-4,-1,9]]/41. Its
+ * translation column is -R^-1 * (1,2,3) = (-28/41, -11/41, -21/41). */
+void makeCoupledMatrix(float *m)
+{
+    makeIdentity(m);
+    m[0] = 2.0f;  m[1] = 1.0f;  m[2] = 1.0f;
+    m[4] = 1.5f;  m[5] = 3.0f;  m[6] = 1.0f;
+    m[8] = -1.5f; m[9] = 1.0f;  m[10] = 4.0f;
+    m[12] = 1.0f; m[13] = 2.0f; m[14] = 3.0f;
 }
 
 }  // namespace
@@ -68,30 +97,34 @@ TEST(setThickness_stores_the_value_and_squares_it_separately)
  * Writes the translation column of mat, the negated translation column of
  * invmat, and the negated translation entries of invtrmat (indices 3, 7, 11 --
  * the last column of each row in the transposed-inverse layout). setMatrix()
- * is called first only to give invtrmat defined values to overwrite; the
- * assertions below are on the entries setPosition itself is documented to
- * touch. */
+ * is called first with the coupled matrix (not identity) so invmat and
+ * invtrmat start with real, non-0/1 values in those slots: setPosition writes
+ * the plain negation -x/-y/-z there rather than anything derived from the
+ * linear part, and against an identity matrix a mutation that multiplied by
+ * invmat[0] or invtrmat[0] -- both 1 there -- was invisible. With the coupled
+ * matrix those factors are 22/41 and 2, so the same mutation is a wrong
+ * number. */
 
 TEST(setPosition_xyz_sets_the_translation_column_and_its_negated_inverses)
 {
     impShape s;
-    float identity[16];
-    makeIdentity(identity);
-    s.setMatrix(identity);
+    float coupled[16];
+    makeCoupledMatrix(coupled);
+    s.setMatrix(coupled);
 
-    s.setPosition(1.0f, 2.0f, 3.0f);
+    s.setPosition(7.0f, 8.0f, 9.0f);
 
-    CHECK_NEAR(s.mat[12], 1.0f, kTol);
-    CHECK_NEAR(s.mat[13], 2.0f, kTol);
-    CHECK_NEAR(s.mat[14], 3.0f, kTol);
+    CHECK_NEAR(s.mat[12], 7.0f, kTol);
+    CHECK_NEAR(s.mat[13], 8.0f, kTol);
+    CHECK_NEAR(s.mat[14], 9.0f, kTol);
 
-    CHECK_NEAR(s.invmat[12], -1.0f, kTol);
-    CHECK_NEAR(s.invmat[13], -2.0f, kTol);
-    CHECK_NEAR(s.invmat[14], -3.0f, kTol);
+    CHECK_NEAR(s.invmat[12], -7.0f, kTol);
+    CHECK_NEAR(s.invmat[13], -8.0f, kTol);
+    CHECK_NEAR(s.invmat[14], -9.0f, kTol);
 
-    CHECK_NEAR(s.invtrmat[3], -1.0f, kTol);
-    CHECK_NEAR(s.invtrmat[7], -2.0f, kTol);
-    CHECK_NEAR(s.invtrmat[11], -3.0f, kTol);
+    CHECK_NEAR(s.invtrmat[3], -7.0f, kTol);
+    CHECK_NEAR(s.invtrmat[7], -8.0f, kTol);
+    CHECK_NEAR(s.invtrmat[11], -9.0f, kTol);
 }
 
 /* --- impShape::setPosition(float*) --------------------------------------------
@@ -185,6 +218,33 @@ TEST(invertMatrix_inverts_a_pure_translation_by_negating_it)
     CHECK_NEAR(s.invmat[0], 1.0f, kTol);
     CHECK_NEAR(s.invmat[5], 1.0f, kTol);
     CHECK_NEAR(s.invmat[10], 1.0f, kTol);
+}
+
+TEST(invertMatrix_inverts_the_coupled_matrix)
+{
+    /* The two cases above are diagonal and pure-translation: neither has a
+     * populated off-diagonal linear part, so which mat entries each cofactor
+     * reads and combines was never pinned here. The coupled matrix's inverse
+     * is derived analytically in makeCoupledMatrix's comment above. */
+    impShape s;
+    makeCoupledMatrix(s.mat);
+
+    const bool ok = s.invertMatrix();
+
+    CHECK(ok);
+    CHECK_NEAR(s.invmat[0], 22.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[1], -6.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[2], -4.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[4], -15.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[5], 19.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[6], -1.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[8], 12.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[9], -7.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[10], 9.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[12], -28.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[13], -11.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[14], -21.0f / 41.0f, 1e-5f);
+    CHECK_NEAR(s.invmat[15], 1.0f, kTol);
 }
 
 TEST(invertMatrix_returns_false_for_a_singular_matrix)
