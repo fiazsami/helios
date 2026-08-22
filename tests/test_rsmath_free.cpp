@@ -155,10 +155,20 @@ TEST(rand_float_stays_inside_the_closed_range)
  * remaps the input into a 256-entry table index plus an interpolation
  * fraction. That machinery has real bug surface -- a wrong scale constant, a
  * swapped sin/cos table, a dropped fraction term, or a wrong byte picked out
- * of the remapped float -- so the values here are exact multiples of pi/2,
- * chosen to land on table boundaries where the expected value is known
- * exactly, at the same 1e-4 tolerance test_impknot.cpp measured the
- * approximation's own error to be under. */
+ * of the remapped float.
+ *
+ * ss-e5n item 1: these tests originally sampled exact multiples of pi/2,
+ * chosen because the expected value is known exactly there. That is also
+ * exactly where the interpolation fraction is zero, so the whole
+ * `fraction * rs_*_fraction_table[i]` term dropped out of the result
+ * whether or not it dropped out of the source -- deleting it, or scaling
+ * it by any factor, left the suite green. The samples below fall
+ * mid-bucket instead, where the un-interpolated error against cosf/sinf
+ * is around 5e-3 -- an order of magnitude outside the tolerance -- while
+ * the interpolated approximation's own error stays under 1e-4. Expected
+ * values come from the standard library rather than from a table
+ * boundary, which is what makes an off-boundary sample checkable at
+ * all. */
 
 TEST(sqrtf_matches_the_real_square_root)
 {
@@ -177,16 +187,29 @@ TEST(inv_sqrtf_matches_the_reciprocal_square_root)
     CHECK(fabsf(rsInvSqrtf(0.25f) - 2.0f) <= 2.0f * 0.01f);
 }
 
-TEST(cosf_matches_the_real_cosine_at_quadrant_boundaries)
+TEST(cosf_interpolates_between_table_entries)
 {
+    CHECK_NEAR(rsCosf(0.31f), cosf(0.31f), 5e-4f);
+    CHECK_NEAR(rsCosf(-0.31f), cosf(-0.31f), 5e-4f);
+    CHECK_NEAR(rsCosf(1.0f), cosf(1.0f), 5e-4f);
+
+    /* The quadrant boundaries this test used to check on their own. They
+     * are still worth pinning -- a wrong scale constant or a swapped table
+     * shows up here first -- they just cannot carry the fraction term. */
     CHECK_NEAR(rsCosf(0.0f), 1.0f, 1e-4f);
     CHECK_NEAR(rsCosf(kPi * 0.5f), 0.0f, 1e-4f);
     CHECK_NEAR(rsCosf(kPi), -1.0f, 1e-4f);
     CHECK_NEAR(rsCosf(kPi * 1.5f), 0.0f, 1e-4f);
 }
 
-TEST(sinf_matches_the_real_sine_at_quadrant_boundaries)
+TEST(sinf_interpolates_between_table_entries)
 {
+    CHECK_NEAR(rsSinf(0.31f), sinf(0.31f), 5e-4f);
+    CHECK_NEAR(rsSinf(0.4f), sinf(0.4f), 5e-4f);
+    CHECK_NEAR(rsSinf(1.2f), sinf(1.2f), 5e-4f);
+
+    /* As above: kept for the scale constant and the table choice, which
+     * the mid-bucket samples share but state less sharply. */
     CHECK_NEAR(rsSinf(0.0f), 0.0f, 1e-4f);
     CHECK_NEAR(rsSinf(kPi * 0.5f), 1.0f, 1e-4f);
     CHECK_NEAR(rsSinf(kPi), 0.0f, 1e-4f);

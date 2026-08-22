@@ -9,11 +9,24 @@
  *
  * Matrices are column-major (mat[12..14] is the translation column), matching
  * the convention noted in test_rsmath.cpp.
+ *
+ * ss-e5n: helios' twin of this file used only identity or pure-translation
+ * matrices in every value() fixture, so all nine linear-part entries of
+ * invtrmat were 0 or 1 and their *indices* were never pinned -- swapping
+ * y*invtrmat[1]+z*invtrmat[2] for y*invtrmat[9]+z*invtrmat[6] in every
+ * primitive's tx computation left that suite green. impRoundedHexahedron's
+ * width/height/length also all defaulted to 1.0 there, so which parameter an
+ * axis reads was invisible too. Every primitive below that reads invtrmat
+ * gets one fixture built on kCoupledMatrix, a matrix whose nine linear-part
+ * entries are all distinct and none is 0 or 1, evaluated at an off-axis
+ * point -- and impRoundedHexahedron is given distinct width/height/length so
+ * each axis can only pass by reading its own parameter.
  */
 
 #include "harness.h"
 
 #include "Implicit/impCapsule.h"
+#include "Implicit/impCrawlPoint.h"
 #include "Implicit/impEllipsoid.h"
 #include "Implicit/impHexahedron.h"
 #include "Implicit/impRoundedHexahedron.h"
@@ -35,12 +48,31 @@ void makeIdentity(float *m)
     m[0] = m[5] = m[10] = m[15] = 1.0f;
 }
 
-void makeTranslation(float *m, float tx, float ty, float tz)
+/* A non-symmetric 3x3 shear/scale block plus a full translation. The block
+ * is deliberately *not* symmetric (m[4] != m[1], m[8] != m[2], m[9] !=
+ * m[6]): an earlier version of this fixture used the symmetric block
+ * [[2,1,1],[1,3,1],[1,1,4]], which made invtrmat's linear part symmetric
+ * too and left the transpose step in impShape::setMatrix() -- and the
+ * index each value()'s tx/ty/tz reads -- unpinned (a verbatim
+ * invtrmat[k]=invmat[k] copy, or reading invtrmat[4]/[8] where tx should
+ * read [1]/[2], both coincidentally matched the transposed value). Every
+ * one of the nine linear-part entries of the resulting invtrmat (computed
+ * independently, by hand, from the adjugate of this block divided by its
+ * determinant of 41/2 -- see the fractions below) is distinct and neither
+ * 0 nor 1:
+ * invtrmat[0..2]  = { 22/41, -15/41,  12/41}
+ * invtrmat[4..6]  = { -6/41,  19/41,  -7/41}
+ * invtrmat[8..10] = { -4/41,  -1/41,   9/41}
+ * so a formula that reads the wrong index, or a setMatrix() that copies
+ * instead of transposing, produces a visibly different result rather than
+ * coincidentally matching. */
+void makeCoupledMatrix(float *m)
 {
     makeIdentity(m);
-    m[12] = tx;
-    m[13] = ty;
-    m[14] = tz;
+    m[0] = 2.0f;  m[1] = 1.0f;  m[2] = 1.0f;
+    m[4] = 1.5f;  m[5] = 3.0f;  m[6] = 1.0f;
+    m[8] = -1.5f; m[9] = 1.0f;  m[10] = 4.0f;
+    m[12] = 1.0f; m[13] = 2.0f; m[14] = 3.0f;
 }
 
 }  // namespace
@@ -125,6 +157,48 @@ TEST(hexahedron_value_at_center_uses_min_divisor_on_every_axis)
     CHECK_NEAR(h.value(pos), expected, 1.0f);
 }
 
+TEST(hexahedron_value_pins_matrix_rotation_and_shear)
+{
+    impHexahedron h;
+    float m[16];
+    makeCoupledMatrix(m);
+    h.setMatrix(m);
+
+    /* Independently derived by replaying setMatrix's own invertMatrix() and
+     * value()'s formula: at position (2,3,5), (tx,ty,tz) = (31/41, -1/41,
+     * 13/41) = (0.756098, -0.024390, 0.317073), giving (xx,yy,zz) =
+     * (1.74891, 1439.09, 9.93686) and value = min = xx. Every term in tx, ty
+     * and tz depends on a distinct invtrmat entry, so reading the wrong one
+     * moves this result by more than kTol.
+     *
+     * This point only exercises tx, though: value() returns the *minimum*
+     * of xx, yy and zz, and here xx is smallest by nearly three orders of
+     * magnitude, so a wrong index inside the ty or tz computation would
+     * leave the returned xx untouched. The two points below make yy and zz
+     * the minimum in turn, so a wrong index anywhere in invtrmat's y or z
+     * rows moves the returned value instead of a term that gets discarded. */
+    float pos[3] = {2.0f, 3.0f, 5.0f};
+    CHECK_NEAR(h.value(pos), 1.748914f, 1e-3f);
+
+    /* At position (-1,-2,1), (tx,ty,tz) = (-8/41, -50/41, -6/41) =
+     * (-0.195122, -1.219512, -0.146341): |ty| is the largest of the three,
+     * so yy = 1/(ty^2+kMinDivisor) is the smallest term and value = yy.
+     * Every coefficient in the ty row (invtrmat[4..7]) feeds this result;
+     * reading invtrmat[6] (the z coefficient) from the wrong row, as from
+     * invtrmat[9], moves ty from -50/41 to -44/41 and the result well
+     * outside kTol. */
+    float tyDominant[3] = {-1.0f, -2.0f, 1.0f};
+    CHECK_NEAR(h.value(tyDominant), 0.672355f, 1e-3f);
+
+    /* At position (1,-1,-2), (tx,ty,tz) = (-15/41, -22/41, -42/41) =
+     * (-0.365854, -0.536585, -1.024390): |tz| is the largest of the three,
+     * so value = zz. Swapping invtrmat[8] and invtrmat[9] -- the x and y
+     * coefficients that feed tz -- moves tz from -42/41 to -36/41 and the
+     * result well outside kTol. */
+    float tzDominant[3] = {1.0f, -1.0f, -2.0f};
+    CHECK_NEAR(h.value(tzDominant), 0.952857f, 1e-3f);
+}
+
 /* --- impEllipsoid::value ---------------------------------------------------- */
 
 TEST(ellipsoid_value_is_max_at_center_and_falls_off_with_squared_distance)
@@ -143,25 +217,25 @@ TEST(ellipsoid_value_is_max_at_center_and_falls_off_with_squared_distance)
     CHECK_NEAR(e.value(off), 0.01f / (25.0f + kMinDivisor), 1e-6f);
 }
 
-TEST(ellipsoid_value_follows_the_matrix_translation)
+TEST(ellipsoid_value_pins_matrix_rotation_and_shear)
 {
     impEllipsoid e;
     float m[16];
-    makeTranslation(m, 5.0f, 0.0f, 0.0f);
+    makeCoupledMatrix(m);
     e.setMatrix(m);
 
-    /* A point at the shape's new center should score exactly like an
-     * untranslated shape evaluated at the origin -- proves invtrmat's
-     * translation column is applied, not just its rotation/scale part. */
-    float atNewCenter[3] = {5.0f, 0.0f, 0.0f};
-    CHECK_NEAR(e.value(atNewCenter), 0.01f / kMinDivisor, 1.0f);
+    /* Same (tx,ty,tz) as the hexahedron coupling case above:
+     * 0.01 / (0.756098^2 + 0.024390^2 + 0.317073^2 + kMinDivisor). */
+    float pos[3] = {2.0f, 3.0f, 5.0f};
+    CHECK_NEAR(e.value(pos), 0.0148607f, 1e-5f);
 }
 
 /* --- impSphere::value -------------------------------------------------------
  *
  * Unlike the others, impSphere reads invmat directly rather than invtrmat, so
  * it is well-defined straight from impShape's constructor (identity) without
- * a setMatrix() call. */
+ * a setMatrix() call, and setMatrix's rotation/shear part never reaches it --
+ * it has no coupling fixture for that reason. */
 
 TEST(sphere_value_is_max_at_center_and_falls_off_with_squared_distance)
 {
@@ -215,6 +289,20 @@ TEST(torus_value_falls_off_along_the_tube_axis)
     CHECK_NEAR(t.value(aboveCenter), 0.01f / (2.0f + kMinDivisor), 1e-6f);
 }
 
+TEST(torus_value_pins_matrix_rotation_and_shear)
+{
+    impTorus t;
+    float m[16];
+    makeCoupledMatrix(m);
+    t.setMatrix(m);
+
+    /* Same (tx,ty,tz) as above; temp = sqrt(0.756098^2 + 0.024390^2) -
+     * 1 = -0.243509 (default radius 1), value = 0.01 / (temp^2 + tz^2 +
+     * kMinDivisor). */
+    float pos[3] = {2.0f, 3.0f, 5.0f};
+    CHECK_NEAR(t.value(pos), 0.0625265f, 1e-5f);
+}
+
 /* --- impTorus::center -------------------------------------------------------- */
 
 TEST(torus_center_combines_radius_along_local_x_with_position)
@@ -239,6 +327,30 @@ TEST(torus_center_combines_radius_along_local_x_with_position)
     CHECK_NEAR(c[2], 30.0f, kTol);
 }
 
+TEST(torus_center_reads_each_axis_from_its_own_mat_column_entry)
+{
+    impTorus t;
+    float m[16];
+    makeCoupledMatrix(m);
+    t.setMatrix(m);
+    t.setRadius(2.0f);
+
+    /* center() reads mat directly (mat[0..2] and mat[12..14]), not
+     * invtrmat, and every test above used an identity or pure-translation
+     * matrix, where mat[0]=1 and mat[1]=mat[2]=0 -- so center()'s c[1] and
+     * c[2] never distinguished mat[1]/mat[2] from any other zero entry, and
+     * reading position[1] from mat[4] instead of mat[1] would have gone
+     * unnoticed. With the coupled matrix (mat[0]=2, mat[1]=1, mat[2]=1,
+     * mat[12..14]=(1,2,3)) and radius 2: c = mat[0..2]*radius + mat[12..14]
+     * = (2*2+1, 1*2+2, 1*2+3) = (5, 4, 5). Reading c[1] from mat[4]=1.5
+     * instead of mat[1]=1 would give 5 instead of 4. */
+    float c[3];
+    t.center(c);
+    CHECK_NEAR(c[0], 5.0f, kTol);
+    CHECK_NEAR(c[1], 4.0f, kTol);
+    CHECK_NEAR(c[2], 5.0f, kTol);
+}
+
 /* --- impTorus::addCrawlPoint -------------------------------------------------- */
 
 TEST(torus_addCrawlPoint_appends_the_same_point_as_center)
@@ -258,6 +370,29 @@ TEST(torus_addCrawlPoint_appends_the_same_point_as_center)
     /* Appends rather than replaces. */
     t.addCrawlPoint(cpv);
     CHECK(cpv.size() == 2);
+}
+
+TEST(torus_addCrawlPoint_reads_each_axis_from_its_own_mat_column_entry)
+{
+    impTorus t;
+    float m[16];
+    makeCoupledMatrix(m);
+    t.setMatrix(m);
+    t.setRadius(2.0f);
+
+    /* Same computation and the same gap as
+     * torus_center_reads_each_axis_from_its_own_mat_column_entry above:
+     * addCrawlPoint() reads mat directly, and every other fixture in this
+     * file used an identity or pure-translation matrix, where mat[1] and
+     * mat[4] were both zero. With the coupled matrix and radius 2, the
+     * appended point is (5, 4, 5), matching center()'s result exactly. */
+    impCrawlPointVector cpv;
+    t.addCrawlPoint(cpv);
+
+    CHECK(cpv.size() == 1);
+    CHECK_NEAR(cpv[0].position[0], 5.0f, kTol);
+    CHECK_NEAR(cpv[0].position[1], 4.0f, kTol);
+    CHECK_NEAR(cpv[0].position[2], 5.0f, kTol);
 }
 
 /* --- impCapsule::value -------------------------------------------------------
@@ -294,12 +429,32 @@ TEST(capsule_value_falls_off_past_its_length)
     CHECK_NEAR(c.value(pastEnd), 0.01f / (4.0f + kMinDivisor), 1e-6f);
 }
 
+TEST(capsule_value_pins_matrix_rotation_and_shear)
+{
+    impCapsule c;
+    float m[16];
+    makeCoupledMatrix(m);
+    c.setMatrix(m);
+
+    /* Position (2,3,5) (used elsewhere in this file) leaves |tz|=0.317073
+     * within the default length of 1, so sz clamps to zero there and the tz
+     * computation -- the sz term's own invtrmat row -- is never exercised.
+     * Position (1,-1,-3) instead gives (tx,ty,tz) = (-0.658537, -0.365854,
+     * -1.243902): tx and ty are unchanged in kind from the (2,3,5) case
+     * above, but |tz|-length=0.243902 is now positive and unclamped, so
+     * sz = 0.243902 contributes: 0.01 / (0.658537^2 + 0.365854^2 +
+     * 0.243902^2 + kMinDivisor). Reading tz from the wrong invtrmat indices
+     * moves sz, and therefore this result, well outside the tolerance. */
+    float pos[3] = {1.0f, -1.0f, -3.0f};
+    CHECK_NEAR(c.value(pos), 0.0159462f, 1e-5f);
+}
+
 /* --- impRoundedHexahedron::value and impRoundedHexahedron() -----------------
  *
  * Each axis clamps the same way the capsule's length axis does: sx = xx *
  * (xx > 0.0f) where xx = fabsf(tx) - width, and likewise for height/length.
  * Constructing the shape exercises its constructor (default width = height =
- * length = 1.0), and every value() call below relies on those defaults. */
+ * length = 1.0), and the first case below relies on those defaults. */
 
 TEST(roundedHexahedron_value_is_zero_falloff_inside_the_box)
 {
@@ -312,18 +467,35 @@ TEST(roundedHexahedron_value_is_zero_falloff_inside_the_box)
     CHECK_NEAR(rh.value(center), 0.01f / kMinDivisor, 1.0f);
 }
 
-TEST(roundedHexahedron_value_only_the_axis_past_the_box_contributes)
+TEST(roundedHexahedron_value_only_the_axis_past_its_own_extent_contributes)
 {
     impRoundedHexahedron rh;
     float m[16];
     makeIdentity(m);
     rh.setMatrix(m);
 
-    /* x=2 is past the default width of 1 (xx = 2 - 1 = 1); y and z are at 0,
-     * inside their default height/length of 1, so they clamp to zero. */
-    float pastX[3] = {2.0f, 0.0f, 0.0f};
-    CHECK_NEAR(rh.value(pastX), 0.01f / (1.0f + kMinDivisor), 1e-6f);
+    /* Distinct width/height/length (1, 2, 3): if any two were swapped in the
+     * formula, one of the three checks below would land on the wrong side of
+     * its extent and change from clamped-zero to positive or vice versa. */
+    rh.setSize(1.0f, 2.0f, 3.0f);
+
+    /* x=2 is 1 past width (2-1=1); y=0 and z=0 are within height and length. */
+    float pastWidth[3] = {2.0f, 0.0f, 0.0f};
+    CHECK_NEAR(rh.value(pastWidth), 0.01f / (1.0f + kMinDivisor), 1e-6f);
+
+    /* y=3 is 1 past height (3-2=1); x=0 and z=0 are within width and length. */
+    float pastHeight[3] = {0.0f, 3.0f, 0.0f};
+    CHECK_NEAR(rh.value(pastHeight), 0.01f / (1.0f + kMinDivisor), 1e-6f);
+
+    /* z=4 is 1 past length (4-3=1); x=0 and y=0 are within width and height. */
+    float pastLength[3] = {0.0f, 0.0f, 4.0f};
+    CHECK_NEAR(rh.value(pastLength), 0.01f / (1.0f + kMinDivisor), 1e-6f);
 }
+
+/* Kept from this file's pre-ss-e5n form, where it read the default extents;
+ * hyperspace's twin dropped it when the coupled-matrix cases went in. Each
+ * case above clears exactly one extent, so none of them shows the three
+ * clamped terms summing rather than one of them winning. */
 
 TEST(roundedHexahedron_value_sums_all_three_axes_past_the_box)
 {
@@ -331,8 +503,45 @@ TEST(roundedHexahedron_value_sums_all_three_axes_past_the_box)
     float m[16];
     makeIdentity(m);
     rh.setMatrix(m);
+    rh.setSize(1.0f, 2.0f, 3.0f);
 
-    /* Past the box on all three axes by 1 each (2 - 1): 1+1+1 = 3. */
-    float pastAll[3] = {2.0f, 2.0f, 2.0f};
+    /* Past every extent by 1 (2-1, 3-2, 4-3), so all three squared terms are
+     * unclamped and contribute: 1+1+1 = 3. */
+    float pastAll[3] = {2.0f, 3.0f, 4.0f};
     CHECK_NEAR(rh.value(pastAll), 0.01f / (3.0f + kMinDivisor), 1e-6f);
+}
+
+TEST(roundedHexahedron_value_pins_matrix_rotation_and_shear)
+{
+    impRoundedHexahedron rh;
+    float m[16];
+    makeCoupledMatrix(m);
+    rh.setMatrix(m);
+
+    /* At position (-2,-1,1), default width=height=length=1: (tx,ty,tz) =
+     * (-1.097561, -0.609756, -0.073171). Only |tx|-width=0.097561 is
+     * positive; y and z clamp to zero, so value = 0.01 / (0.097561^2 +
+     * kMinDivisor) and every coefficient in the tx row (invtrmat[0..3])
+     * feeds it. */
+    float txDominant[3] = {-2.0f, -1.0f, 1.0f};
+    CHECK_NEAR(rh.value(txDominant), 1.0397016f, 1e-3f);
+
+    /* An earlier version of the second case below used position (5,5,5):
+     * with x==y==z, swapping invtrmat[8] and invtrmat[9] -- the x and y
+     * coefficients that feed tz -- left tz, and therefore the test,
+     * unchanged, since it multiplies equal x and y by the swapped pair of
+     * coefficients either way, and the point above has the same problem
+     * for tz specifically (|tz| never clears length=1 there). Shrinking
+     * length to 0.5 and moving to a point with three distinct, nonzero
+     * components makes tz the only unclamped axis instead, so the tz
+     * computation is what this second case actually pins.
+     *
+     * At position (1,-1,-2), (tx,ty,tz) = (-0.365854, -0.536585,
+     * -1.024390): |tx|-width=-0.634146 and |ty|-height=-0.463415 are both
+     * negative and clamp to zero; |tz|-length=0.524390 is the only positive
+     * term, so value = 0.01 / (0.524390^2 + kMinDivisor). Reading tz from
+     * the wrong invtrmat indices moves it well outside this tolerance. */
+    rh.setSize(1.0f, 1.0f, 0.5f);
+    float tzDominant[3] = {1.0f, -1.0f, -2.0f};
+    CHECK_NEAR(rh.value(tzDominant), 0.0363524f, 1e-5f);
 }
