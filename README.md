@@ -26,7 +26,7 @@ Drawing code that calls OpenGL directly (`Helios.cpp`, `HeliosView.mm`) is outsi
 | Defect | Effect | Fix |
 | --- | --- | --- |
 | Vertex-buffer names generated in the `impSurface` constructor | Crashed without an OpenGL context, so `impCubeVolume` could not be constructed in a test at all; invisible to the running saver | [`c420260`](https://github.com/fiazsami/helios/commit/c420260) |
-| `impCubeVolume::frame` never initialised | The surface cache could report a false hit on the first frame; harmless in the saver | [`b7b2fb7`](https://github.com/fiazsami/helios/commit/b7b2fb7) |
+| `impCubeVolume::frame` never initialized | The surface cache could report a false hit on the first frame; harmless in the saver | [`b7b2fb7`](https://github.com/fiazsami/helios/commit/b7b2fb7) |
 | The same frame counter wrapped at 65,536 | The same false hit returned after the wrap; review found the first fix was only half a fix | [`8d723e6`](https://github.com/fiazsami/helios/commit/8d723e6), [`ad4f708`](https://github.com/fiazsami/helios/commit/ad4f708) |
 | Unsigned clamp of out-of-volume crawl points | Points were sent to the far face of the volume instead of the near one; no visible effect today | [`82bb150`](https://github.com/fiazsami/helios/commit/82bb150) |
 | `#ifdef` where every call site used `#if USE_TRIANGLE_STRIPS` | Dead code was compiled in | [`fd2a4ce`](https://github.com/fiazsami/helios/commit/fd2a4ce) |
@@ -50,8 +50,8 @@ You need macOS 26 and Xcode, or the Xcode command-line tools for the tests alone
 
 The tests, fixes and reviews were written by coding agents (Claude Code) running inside a harness, under the direction of [Fiaz Sami](https://github.com/fiazsami). The harness provides a coverage ratchet, guard hooks and a separate verifier agent. Every change reached `master` through a pull request, with CI from the second one onward; review findings, and the fixes they prompted, are recorded in pull request comments and commit messages. The harness, the coverage data and dated write-ups of what went wrong are in [fiazsami/screen-savers](https://github.com/fiazsami/screen-savers).
 
-## Credits and licence
+## Credits and license
 
 - Helios © 1999–2010 Terence M. Welsh.
 - macOS port by Nick Zitzmann ([nickzman/helios](https://github.com/nickzman/helios)).
-- Licensed under the GPL, version 2 or later ([`LICENSE.txt`](LICENSE.txt)). The core libraries (`rsMath`, `Implicit`, `Rgbhsl` and others) are LGPL-2.1 or later, per their file headers. The macOS view files (`*View.h`, `*View.mm`) carry their own copyright notices with no separate licence grant; see their headers.
+- Licensed under the GPL, version 2 or later ([`LICENSE.txt`](LICENSE.txt)). The core libraries (`rsMath`, `Implicit`, `Rgbhsl` and others) are LGPL-2.1 or later, per their file headers. The macOS view files (`*View.h`, `*View.mm`) carry their own copyright notices with no separate license grant; see their headers.
